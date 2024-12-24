@@ -1,56 +1,80 @@
-import gradio as gr
+import streamlit as st
+import pickle 
+import os
+from streamlit_extras.add_vertical_space import add_vertical_space
+from PyPDF2 import PdfReader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.llms import HuggingFaceHub
+from langchain.vectorstores import FAISS
+from dotenv import load_dotenv
 from langchain.embeddings import HuggingFaceEmbeddings
-from langchain.vectorstores import Chroma
-from langchain.chains import RetrievalQA
-from langchain.document_loaders import PyMuPDFLoader
+from langchain.chains import ConversationalRetrievalChain
+from langchain.chains.question_answering import load_qa_chain
 
 
-import os
+# Sidebar contents
+with st.sidebar:
+    st.title('LLM Chat App')
+    st.markdown('''
+    ##  About
+    This app is an LLM-powered chatbot built using:
+    -[Streamlit](https://streamlit.io/)
+    -[LangChain](https://python.langchain.com/)
+    ''')
+    add_vertical_space(5)
+    st.write('Made by Sakshi from IIT Bombay')
 
-os.environ["HUGGINGFACEHUB_API_TOKEN"] = "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"
+def main():
+    st.header("Chat With your PDF") 
+    load_dotenv()
+    # upload a pdf file
+    pdf = st.file_uploader("Upload yourPDF",type = 'pdf')
+    
+    # st.write(pdf)
+    if pdf is not None:
+        pdf_reader = PdfReader(pdf)
 
-def load_doc(pdf_doc):
+        text = ""
+        for page in pdf_reader.pages:
+            text += page.extract_text()
+        
+        text_splitter = RecursiveCharacterTextSplitter(
+            chunk_size = 1000,
+            chunk_overlap = 200,
+            length_function = len
+            )
+        chunks = text_splitter.split_text(text=text)
 
-    loader = PyMuPDFLoader(pdf_doc.name)
-    documents = loader.load()
-    embedding = HuggingFaceEmbeddings()
-    text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
-    text = text_splitter.split_documents(documents)
-    db = Chroma.from_documents(text, embedding)
-    llm = HuggingFaceHub(repo_id="OpenAssistant/oasst-sft-1-pythia-12b", model_kwargs={"temperature": 1.0, "max_length": 256})
-    global chain
-    chain = RetrievalQA.from_chain_type(llm=llm,chain_type="stuff",retriever=db.as_retriever())
-    return 'Document has successfully been loaded'
+        ## embeddings
+        store_name = pdf.name[:-4]
+        if os.path.exists(f"{store_name}.pkl"):
+            with open(f"{store_name}.pkl", "rb") as f:
+                VectorStore = pickle.load(f)
+            st.write('Embeddings Loaded from the Disk')
+        else:
+             embeddings = HuggingFaceEmbeddings(model_name = "sentence-transformers/all-MiniLM-L6-v2")
+             VectorStore = FAISS.from_texts(chunks,embedding=embeddings)
+             with open(f"{store_name}.pkl","wb") as f:
+                  pickle.dump(VectorStore,f)
+             st.write('Embeddings Computation Completed ')
 
-def answer_query(query):
-    question = query
-    return chain.run(question)
-html = """
-<div style="text-align:center; max width: 700px;">
-    <h1>ChatPDF</h1>
-    <p> Upload a PDF File, then click on Load PDF File <br>
-    Once the document has been loaded you can begin chatting with the PDF =)
-</div>"""
-css = """container{max-width:700px; margin-left:auto; margin-right:auto,padding:20px}"""
-with gr.Blocks(css=css,theme=gr.themes.Monochrome()) as demo:
-    gr.HTML(html)
-    with gr.Column():
-        gr.Markdown('ChatPDF')
-        pdf_doc = gr.File(label="Load a pdf",file_types=['.pdf','.docx'],type='file')
-        with gr.Row():
-            load_pdf = gr.Button('Load pdf file')
-            status = gr.Textbox(label="Status",placeholder='',interactive=False)
+    # Accept user question/query
+    query = st.text_input("Ask questions about your PDF file:")
+    #st.write(query)
+
+    if query:
+        docs = VectorStore.similarity_search(query=query,k=3)
+        #llm =  HuggingFaceHub(repo_id="google/flan-t5-small",huggingfacehub_api_token= "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", model_kwargs={"temperature": 0.3, "max_length": 256})
+        #chain = load_qa_chain(llm=llm,chain_type='stuff')
+        #response = chain.run(input_documents=docs,question=query)
+        st.write(docs)    
+ 
 
 
-        with gr.Row():
-            input = gr.Textbox(label="type in your question")
-            output = gr.Textbox(label="output")
-        submit_query = gr.Button("submit")
 
-        load_pdf.click(load_doc,inputs=pdf_doc,outputs=status)
 
-        submit_query.click(answer_query,input,output)
+    
+        st.write(chunks)
 
-demo.launch()
+if __name__ == '__main__':
+   main()
